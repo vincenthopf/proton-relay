@@ -1,0 +1,25 @@
+# Shared services for Proton Relay
+# Run with: docker compose -f docker-compose.yml --profile captcha up -d
+
+services:
+  # Browser for CAPTCHA clearing - shared across all instances
+  # Access at http://your-server:5800
+  captcha-browser:
+    image: jlesage/firefox
+    container_name: proton-relay-captcha
+    profiles: [captcha]
+    ports:
+      - "5800:5800"
+    environment:
+      - DISPLAY_WIDTH=1280
+      - DISPLAY_HEIGHT=900
+      - KEEP_APP_RUNNING=1
+      - FF_OPEN_URL=https://account.proton.me/login
+    shm_size: 2gb
+    networks:
+      - proton-relay-network
+
+networks:
+  proton-relay-network:
+    name: proton-relay-network
+    driver: bridge

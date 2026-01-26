@@ -48,5 +48,5 @@ Thumbs.db
 bridge_password.txt
 
 # Deploy instances (runtime data)
-deploy/instances/*/auth/
-deploy/instances/*/.env
+deploy/instances/
+deploy/shared.env

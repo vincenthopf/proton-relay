@@ -15,8 +15,14 @@ source "$SCRIPT_DIR/lib/colors.sh"
 
 # Header
 proton_header "Proton Relay" "Start Instances"
-
 echo ""
+
+# Check for shared.env
+if [[ ! -f "$SCRIPT_DIR/shared.env" ]]; then
+    proton_error "shared.env not found."
+    proton_muted "Run ./setup-all.sh to configure."
+    exit 1
+fi
 
 # Check which instances are configured
 configured=()
@@ -26,7 +32,12 @@ for instance_dir in "$INSTANCES_DIR"/*/; do
     [ -d "$instance_dir" ] || continue
     name=$(basename "$instance_dir")
     if [[ -f "$instance_dir/.env" ]]; then
-        configured+=("$name")
+        # Check if credentials are set
+        if grep -q "^PROTONMAIL_USERNAME=.\+" "$instance_dir/.env" 2>/dev/null; then
+            configured+=("$name")
+        else
+            unconfigured+=("$name")
+        fi
     else
         unconfigured+=("$name")
     fi
@@ -34,12 +45,12 @@ done
 
 if [[ ${#configured[@]} -eq 0 ]]; then
     proton_error "No configured instances found."
-    proton_muted "Copy .env.example to .env in each instance directory."
+    proton_muted "Run ./setup-all.sh to create and configure instances."
     exit 1
 fi
 
 # Show status
-proton_success "Configured: ${configured[*]}"
+proton_success "Ready: ${configured[*]}"
 [[ ${#unconfigured[@]} -gt 0 ]] && gum style --foreground "$COLOR_WARNING" "Unconfigured (skipping): ${unconfigured[*]}"
 echo ""
 
@@ -55,6 +66,9 @@ fi
 echo ""
 gum confirm --prompt.foreground "$PROTON_PURPLE" "Start ${#configured[@]} instance(s)?" || exit 0
 echo ""
+
+# Create shared network
+docker network create proton-relay-network 2>/dev/null || true
 
 # Start instances
 FIRST=true
@@ -73,7 +87,7 @@ for name in "${configured[@]}"; do
     FIRST=false
 
     gum spin --spinner dot --spinner.foreground "$PROTON_PURPLE" --title "Starting $name..." -- \
-        bash -c "cd '$instance_dir' && docker compose up -d 2>&1"
+        bash -c "cd '$instance_dir' && ./start.sh 2>&1"
 
     proton_success "$name started"
 done
@@ -82,5 +96,10 @@ echo ""
 gum style \
     --foreground "$COLOR_SUCCESS" --border-foreground "$COLOR_SUCCESS" --border rounded \
     --padding "1 2" \
-    "All instances started! Run ./status.sh to check health."
+    "All instances started!
+
+Commands:
+  ./status.sh         View health dashboard
+  ./logs.sh           View logs
+  ./captcha.sh start  Open browser if CAPTCHA needed"
 echo ""
