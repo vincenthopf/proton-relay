@@ -22,54 +22,131 @@ fi
 # Load Proton colors
 source "$SCRIPT_DIR/lib/colors.sh"
 
-# Header
+# ============================================
+# WELCOME SCREEN
+# ============================================
+clear
 proton_header "Proton Relay" "Setup Wizard"
 echo ""
+gum style --foreground "$COLOR_MUTED" --width 60 \
+    "This wizard will help you configure email forwarding from
+ProtonMail to another email provider.
+
+You'll need:
+  • Your destination SMTP credentials (e.g., Fastmail)
+  • ProtonMail login for each account to forward
+  • (Optional) Telegram bot token for alerts"
+echo ""
+gum confirm --prompt.foreground "$PROTON_PURPLE" "Ready to begin?" || exit 0
 
 # ============================================
-# STEP 1: Configure shared settings
+# STEP 1: SMTP CONFIGURATION
 # ============================================
-gum style --foreground "$PROTON_PURPLE" --bold "Step 1: Shared Configuration"
-proton_muted "These settings apply to ALL instances"
+clear
+proton_header "Proton Relay" "Step 1 of 3"
+echo ""
+gum style --foreground "$PROTON_PURPLE" --bold "Destination SMTP Server"
+echo ""
+gum style --foreground "$COLOR_MUTED" --width 60 \
+    "Where should forwarded emails be sent? Enter the SMTP
+server details for your destination email provider.
+
+Common providers:
+  • Fastmail: smtp.fastmail.com, port 587
+  • Gmail: smtp.gmail.com, port 587
+  • iCloud: smtp.mail.me.com, port 587"
 echo ""
 
-# Check if shared.env already exists
-if [[ -f "$SCRIPT_DIR/shared.env" ]]; then
-    proton_muted "Found existing shared.env"
-    if ! gum confirm --prompt.foreground "$PROTON_PURPLE" "Reconfigure shared settings?"; then
-        proton_muted "Keeping existing shared.env"
-        SKIP_SHARED=true
-    fi
+SMTP_HOST=$(gum input \
+    --placeholder "smtp.fastmail.com" \
+    --prompt "SMTP Server: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --value "smtp.fastmail.com" \
+    --width 50)
+
+SMTP_PORT=$(gum input \
+    --placeholder "587" \
+    --prompt "SMTP Port: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --value "587" \
+    --width 20)
+
+echo ""
+gum style --foreground "$COLOR_MUTED" "Your login credentials for the SMTP server:"
+echo ""
+
+SMTP_USERNAME=$(gum input \
+    --placeholder "you@fastmail.com" \
+    --prompt "SMTP Username: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --width 50)
+
+SMTP_PASSWORD=$(gum input \
+    --placeholder "app-password" \
+    --prompt "SMTP Password: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --password \
+    --width 50)
+
+# ============================================
+# STEP 1b: FORWARDING DESTINATION
+# ============================================
+clear
+proton_header "Proton Relay" "Step 1 of 3"
+echo ""
+gum style --foreground "$PROTON_PURPLE" --bold "Forwarding Destination"
+echo ""
+gum style --foreground "$COLOR_MUTED" --width 60 \
+    "All emails from your ProtonMail accounts will be
+forwarded to this single email address."
+echo ""
+
+FORWARD_TO=$(gum input \
+    --placeholder "destination@example.com" \
+    --prompt "Forward all emails to: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --width 50)
+
+# ============================================
+# STEP 1c: TELEGRAM ALERTS
+# ============================================
+clear
+proton_header "Proton Relay" "Step 1 of 3"
+echo ""
+gum style --foreground "$PROTON_PURPLE" --bold "Telegram Alerts (Optional)"
+echo ""
+gum style --foreground "$COLOR_MUTED" --width 60 \
+    "Get notified when something goes wrong (CAPTCHA required,
+auth failures, etc). Highly recommended for long-running
+migrations.
+
+To set up:
+  1. Message @BotFather on Telegram, create a bot
+  2. Copy the bot token (looks like 123456:ABC-xyz...)
+  3. Message @userinfobot to get your chat ID
+
+Leave blank to skip."
+echo ""
+
+TELEGRAM_BOT_TOKEN=$(gum input \
+    --placeholder "leave blank to skip" \
+    --prompt "Telegram Bot Token: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --width 60)
+
+TELEGRAM_CHAT_ID=""
+if [[ -n "$TELEGRAM_BOT_TOKEN" ]]; then
+    TELEGRAM_CHAT_ID=$(gum input \
+        --placeholder "123456789" \
+        --prompt "Telegram Chat ID: " \
+        --prompt.foreground "$PROTON_MAIL" \
+        --width 30)
 fi
 
-if [[ "$SKIP_SHARED" != true ]]; then
-    echo ""
-    gum style --foreground "$PROTON_MAIL" "Destination SMTP (where emails forward TO):"
-
-    SMTP_HOST=$(gum input --placeholder "smtp.fastmail.com" --prompt "SMTP Host: " --prompt.foreground "$COLOR_MUTED" --value "smtp.fastmail.com")
-    SMTP_PORT=$(gum input --placeholder "587" --prompt "SMTP Port: " --prompt.foreground "$COLOR_MUTED" --value "587")
-    SMTP_USERNAME=$(gum input --placeholder "you@fastmail.com" --prompt "SMTP Username: " --prompt.foreground "$COLOR_MUTED")
-    SMTP_PASSWORD=$(gum input --placeholder "app-password" --prompt "SMTP Password: " --prompt.foreground "$COLOR_MUTED" --password)
-
-    echo ""
-    gum style --foreground "$PROTON_MAIL" "Forwarding destination:"
-    FORWARD_TO=$(gum input --placeholder "destination@example.com" --prompt "Forward all emails to: " --prompt.foreground "$COLOR_MUTED")
-
-    echo ""
-    gum style --foreground "$PROTON_MAIL" "Telegram Alerts (optional but recommended):"
-    proton_muted "Create a bot via @BotFather, get chat ID via @userinfobot"
-    echo ""
-
-    TELEGRAM_BOT_TOKEN=$(gum input --placeholder "123456:ABC-DEF..." --prompt "Bot Token (or blank): " --prompt.foreground "$COLOR_MUTED")
-    TELEGRAM_CHAT_ID=""
-    if [[ -n "$TELEGRAM_BOT_TOKEN" ]]; then
-        TELEGRAM_CHAT_ID=$(gum input --placeholder "123456789" --prompt "Chat ID: " --prompt.foreground "$COLOR_MUTED")
-    fi
-
-    # Write shared.env
-    cat > "$SCRIPT_DIR/shared.env" << EOF
+# Write shared.env
+cat > "$SCRIPT_DIR/shared.env" << EOF
 # Shared configuration for all Proton Relay instances
-# Generated by setup wizard
+# Generated by setup wizard on $(date)
 
 # Destination SMTP
 SMTP_HOST=$SMTP_HOST
@@ -85,30 +162,33 @@ FORWARD_TO=$FORWARD_TO
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
 
-# Optional
+# Optional settings
 LOG_LEVEL=INFO
 MAX_EMAILS_PER_BATCH=10
 MARK_AS_READ=true
 DELETE_AFTER_FORWARD=false
 EOF
 
-    echo ""
-    proton_success "Shared configuration saved"
-fi
-
 # ============================================
-# STEP 2: Create instances
+# STEP 2: NUMBER OF ACCOUNTS
 # ============================================
+clear
+proton_header "Proton Relay" "Step 2 of 3"
 echo ""
-gum style --foreground "$PROTON_PURPLE" --bold "Step 2: ProtonMail Accounts"
-proton_muted "How many ProtonMail accounts do you want to forward?"
+gum style --foreground "$PROTON_PURPLE" --bold "ProtonMail Accounts"
+echo ""
+gum style --foreground "$COLOR_MUTED" --width 60 \
+    "How many ProtonMail accounts do you want to forward?
+
+Each account will run as a separate instance with its own
+check interval (staggered to avoid rate limits)."
 echo ""
 
 count=$(gum input \
-    --placeholder "Number of accounts (1-10)" \
-    --prompt "> " \
-    --prompt.foreground "$PROTON_PURPLE" \
-    --width 30)
+    --placeholder "4" \
+    --prompt "Number of accounts: " \
+    --prompt.foreground "$PROTON_MAIL" \
+    --width 20)
 
 # Validate input
 if ! [[ "$count" =~ ^[0-9]+$ ]] || [[ "$count" -lt 1 ]] || [[ "$count" -gt 10 ]]; then
@@ -116,24 +196,49 @@ if ! [[ "$count" =~ ^[0-9]+$ ]] || [[ "$count" -lt 1 ]] || [[ "$count" -gt 10 ]]
     exit 1
 fi
 
-echo ""
+# ============================================
+# STEP 3: ACCOUNT CREDENTIALS
+# ============================================
+
+# Clean up old instances
+if [[ -d "$SCRIPT_DIR/instances" ]]; then
+    rm -rf "$SCRIPT_DIR/instances"
+fi
+mkdir -p "$SCRIPT_DIR/instances"
 
 # Intervals: staggered using primes
 intervals=(30 37 43 47 53 59 61 67 71 73)
 
-# Create instances and collect credentials
 instances=()
 for ((i=1; i<=count; i++)); do
+    clear
+    proton_header "Proton Relay" "Step 3 of 3"
+    echo ""
+    gum style --foreground "$PROTON_PURPLE" --bold "Account $i of $count"
+    echo ""
+    gum style --foreground "$COLOR_MUTED" --width 60 \
+        "Enter the ProtonMail credentials for account $i.
+
+This is your regular ProtonMail login (not a bridge password).
+The bridge password will be generated automatically."
+    echo ""
+
     health_port=$((8080 + i))
     interval=${intervals[$((i-1))]}
     name="proton${i}"
 
-    echo ""
-    gum style --foreground "$PROTON_MAIL" --bold "Account $i of $count: $name"
-    echo ""
+    pm_user=$(gum input \
+        --placeholder "user@protonmail.com" \
+        --prompt "ProtonMail Email: " \
+        --prompt.foreground "$PROTON_MAIL" \
+        --width 50)
 
-    pm_user=$(gum input --placeholder "user@protonmail.com" --prompt "ProtonMail email: " --prompt.foreground "$COLOR_MUTED")
-    pm_pass=$(gum input --placeholder "password" --prompt "ProtonMail password: " --prompt.foreground "$COLOR_MUTED" --password)
+    pm_pass=$(gum input \
+        --placeholder "password" \
+        --prompt "ProtonMail Password: " \
+        --prompt.foreground "$PROTON_MAIL" \
+        --password \
+        --width 50)
 
     # Create instance
     "$SCRIPT_DIR/setup-instance.sh" "$name" "$health_port" "$interval" > /dev/null
@@ -143,46 +248,48 @@ for ((i=1; i<=count; i++)); do
     sed -i.bak "s/^PROTONMAIL_PASSWORD=.*/PROTONMAIL_PASSWORD=$pm_pass/" "$SCRIPT_DIR/instances/$name/.env"
     rm -f "$SCRIPT_DIR/instances/$name/.env.bak"
 
-    proton_success "$name configured (health: $health_port, interval: ${interval}s)"
     instances+=("$name")
+
+    echo ""
+    proton_success "Account $i configured"
+    sleep 1
 done
 
 # ============================================
-# STEP 3: Summary
+# COMPLETE
 # ============================================
-echo ""
-gum style --foreground "$PROTON_PURPLE" --bold "Step 3: Setup Complete"
+clear
+proton_header "Proton Relay" "Setup Complete"
 echo ""
 
-summary="Created ${#instances[@]} instance(s):
-
-"
+# Build summary
+instance_list=""
 for name in "${instances[@]}"; do
-    summary+="  • $name
+    instance_list+="  • $name
 "
 done
-summary+="
-Shared config: $SCRIPT_DIR/shared.env
-Instances: $SCRIPT_DIR/instances/
-
-Commands:
-  ./start-all.sh      Start all instances
-  ./stop-all.sh       Stop all instances
-  ./status.sh         View status dashboard
-  ./captcha.sh start  Open browser for CAPTCHA"
 
 gum style \
     --foreground "$COLOR_SUCCESS" --border-foreground "$COLOR_SUCCESS" --border rounded \
-    --padding "1 2" "$summary"
+    --padding "1 2" --width 60 \
+    "Configuration saved!
+
+Accounts configured:
+$instance_list
+Files created:
+  • shared.env (SMTP, Telegram settings)
+  • instances/proton*/  (per-account config)
+
+Next steps:
+  1. Run ./start-all.sh to start forwarding
+  2. Use ./status.sh to monitor health
+  3. Use ./captcha.sh if CAPTCHA issues arise"
 
 echo ""
 if [[ "$count" -gt 1 ]]; then
-    proton_warning "IMPORTANT: Stagger initial startup!"
-    proton_muted "The first start authenticates with ProtonMail."
-    proton_muted "Start instances 5-10 minutes apart to avoid rate limits."
-    echo ""
-    proton_muted "Run: ./start-all.sh"
-else
-    proton_muted "Run: ./start-all.sh"
+    proton_warning "First startup will take time"
+    gum style --foreground "$COLOR_MUTED" --width 60 \
+        "Each account authenticates with ProtonMail on first run.
+To avoid rate limits, instances start 5 minutes apart."
 fi
 echo ""
