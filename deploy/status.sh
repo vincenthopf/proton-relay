@@ -9,11 +9,11 @@ if ! command -v gum &> /dev/null; then
     exit 1
 fi
 
+# Load Proton colors
+source "$SCRIPT_DIR/lib/colors.sh"
+
 # Header
-gum style \
-    --foreground 212 --border-foreground 212 --border double \
-    --align center --width 60 --margin "1 2" --padding "1 2" \
-    'Proton Relay' 'Status Dashboard'
+proton_header "Proton Relay" "Status Dashboard"
 
 echo ""
 
@@ -48,30 +48,30 @@ for instance_dir in "$INSTANCES_DIR"/*/; do
         [[ -z "$error_count" ]] && error_count="-"
     fi
 
-    # Status colors
-    h_color=196  # red
-    f_color=196
-    [[ "$hydroxide_status" == "healthy" ]] && h_color=42  # green
-    [[ "$hydroxide_status" == "starting" ]] && h_color=214  # yellow
-    [[ "$forwarder_status" == "healthy" ]] && f_color=42
-    [[ "$forwarder_status" == "starting" ]] && f_color=214
+    # Status colors (using Proton palette)
+    h_color="$COLOR_ERROR"
+    f_color="$COLOR_ERROR"
+    [[ "$hydroxide_status" == "healthy" ]] && h_color="$COLOR_SUCCESS"
+    [[ "$hydroxide_status" == "starting" ]] && h_color="$COLOR_WARNING"
+    [[ "$forwarder_status" == "healthy" ]] && f_color="$COLOR_SUCCESS"
+    [[ "$forwarder_status" == "starting" ]] && f_color="$COLOR_WARNING"
 
     # Overall status
     if [[ "$hydroxide_status" == "healthy" ]] && [[ "$forwarder_status" == "healthy" ]]; then
         status_icon="✓"
-        status_color=42
+        status_color="$COLOR_SUCCESS"
     elif [[ "$hydroxide_status" == "stopped" ]] && [[ "$forwarder_status" == "stopped" ]]; then
         status_icon="○"
-        status_color=240
+        status_color="$COLOR_MUTED"
     else
         status_icon="!"
-        status_color=214
+        status_color="$COLOR_WARNING"
     fi
 
     # Format status strings with color
-    h_status_str=$(gum style --foreground $h_color "$hydroxide_status")
-    f_status_str=$(gum style --foreground $f_color "$forwarder_status")
-    name_str=$(gum style --foreground $status_color --bold "$status_icon $name")
+    h_status_str=$(gum style --foreground "$h_color" "$hydroxide_status")
+    f_status_str=$(gum style --foreground "$f_color" "$forwarder_status")
+    name_str=$(gum style --foreground "$status_color" --bold "$status_icon $name")
 
     # Build instance box content
     box_content="$name_str
@@ -79,18 +79,18 @@ for instance_dir in "$INSTANCES_DIR"/*/; do
   hydroxide:  $h_status_str
   forwarder:  $f_status_str
 
-  forwarded: $forward_count    errors: $error_count
-  health: http://localhost:${health_port:-????}/health"
+  $(gum style --foreground "$COLOR_MUTED" "forwarded:") $forward_count    $(gum style --foreground "$COLOR_MUTED" "errors:") $error_count
+  $(gum style --foreground "$COLOR_MUTED" "health:") http://localhost:${health_port:-????}/health"
 
-    gum style --border rounded --border-foreground $status_color --padding "0 1" --width 58 "$box_content"
+    gum style --border rounded --border-foreground "$status_color" --padding "0 1" --width 58 "$box_content"
     echo ""
 done
 
 if [[ "$has_instances" == false ]]; then
-    gum style --foreground 240 "No instances found. Run ./setup-all.sh first."
+    proton_muted "No instances found. Run ./setup-all.sh first."
 fi
 
 # Legend
-legend="Legend: $(gum style --foreground 42 '✓ healthy')  $(gum style --foreground 214 '! degraded')  $(gum style --foreground 240 '○ stopped')"
-gum style --foreground 240 "$legend"
+legend="Legend: $(gum style --foreground "$COLOR_SUCCESS" '✓ healthy')  $(gum style --foreground "$COLOR_WARNING" '! degraded')  $(gum style --foreground "$COLOR_MUTED" '○ stopped')"
+proton_muted "$legend"
 echo ""

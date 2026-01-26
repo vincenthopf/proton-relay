@@ -19,18 +19,18 @@ if ! command -v gum &> /dev/null; then
     fi
 fi
 
+# Load Proton colors
+source "$SCRIPT_DIR/lib/colors.sh"
+
 # Header
-gum style \
-    --foreground 212 --border-foreground 212 --border double \
-    --align center --width 50 --margin "1 2" --padding "1 2" \
-    'Proton Relay' 'Multi-Account Setup'
+proton_header "Proton Relay" "Multi-Account Setup"
 
 echo ""
-gum style --foreground 240 "This will create 4 forwarder instances with staggered intervals."
+proton_muted "This will create 4 forwarder instances with staggered intervals."
 echo ""
 
 # Confirm
-gum confirm "Create 4 ProtonMail forwarder instances?" || exit 0
+gum confirm --prompt.foreground "$PROTON_PURPLE" "Create 4 ProtonMail forwarder instances?" || exit 0
 
 echo ""
 
@@ -45,15 +45,15 @@ instances=(
 for instance in "${instances[@]}"; do
     IFS=':' read -r name health_port captcha_port interval <<< "$instance"
 
-    gum spin --spinner dot --title "Creating $name..." -- \
+    gum spin --spinner dot --spinner.foreground "$PROTON_PURPLE" --title "Creating $name..." -- \
         "$SCRIPT_DIR/setup-instance.sh" "$name" "$health_port" "$captcha_port" "$interval"
 
-    gum style --foreground 42 "✓ $name created (health: $health_port, interval: ${interval}s)"
+    proton_success "$name created (health: $health_port, interval: ${interval}s)"
 done
 
 echo ""
 gum style \
-    --foreground 42 --border-foreground 42 --border rounded \
+    --foreground "$COLOR_SUCCESS" --border-foreground "$COLOR_SUCCESS" --border rounded \
     --align left --width 60 --padding "1 2" \
     "All instances created!
 
@@ -65,6 +65,6 @@ Instance directories:
   $SCRIPT_DIR/instances/"
 
 echo ""
-gum style --foreground 214 --bold "⚠  IMPORTANT: Stagger initial authentication!"
-gum style --foreground 240 "   Start instances one at a time, 5-10 min apart."
+proton_warning "IMPORTANT: Stagger initial authentication!"
+proton_muted "   Start instances one at a time, 5-10 min apart."
 echo ""

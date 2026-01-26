@@ -10,9 +10,12 @@ if ! command -v gum &> /dev/null; then
     exit 1
 fi
 
-# Header
+# Load Proton colors
+source "$SCRIPT_DIR/lib/colors.sh"
+
+# Header (red-ish for stop action)
 gum style \
-    --foreground 196 --border-foreground 196 --border double \
+    --foreground "$COLOR_ERROR" --border-foreground "$COLOR_ERROR" --border double \
     --align center --width 50 --margin "1 2" --padding "1 2" \
     'Proton Relay' 'Stop Instances'
 
@@ -29,25 +32,25 @@ for instance_dir in "$INSTANCES_DIR"/*/; do
 done
 
 if [[ ${#running[@]} -eq 0 ]]; then
-    gum style --foreground 240 "No running instances found."
+    proton_muted "No running instances found."
     exit 0
 fi
 
-gum style --foreground 214 "Running instances: ${running[*]}"
+gum style --foreground "$COLOR_WARNING" "Running instances: ${running[*]}"
 echo ""
 
-gum confirm "Stop all ${#running[@]} instance(s)?" || exit 0
+gum confirm --prompt.foreground "$COLOR_ERROR" "Stop all ${#running[@]} instance(s)?" || exit 0
 echo ""
 
 for name in "${running[@]}"; do
     instance_dir="$INSTANCES_DIR/$name"
 
-    gum spin --spinner dot --title "Stopping $name..." -- \
+    gum spin --spinner dot --spinner.foreground "$PROTON_PURPLE" --title "Stopping $name..." -- \
         bash -c "cd '$instance_dir' && docker compose down 2>&1"
 
-    gum style --foreground 42 "✓ $name stopped"
+    proton_success "$name stopped"
 done
 
 echo ""
-gum style --foreground 42 "All instances stopped."
+proton_success "All instances stopped."
 echo ""

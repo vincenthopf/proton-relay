@@ -17,10 +17,11 @@ for instance_dir in "$INSTANCES_DIR"/*/; do
     fi
 done
 
-# Check if running interactively (has gum)
+# Check if running interactively (has gum and colors)
 INTERACTIVE=false
-if command -v gum &> /dev/null && [[ -t 1 ]]; then
+if command -v gum &> /dev/null && [[ -t 1 ]] && [[ -f "$SCRIPT_DIR/lib/colors.sh" ]]; then
     INTERACTIVE=true
+    source "$SCRIPT_DIR/lib/colors.sh"
 fi
 
 generate_report() {
@@ -86,10 +87,7 @@ REPORT=$(generate_report)
 
 # Display report
 if [[ "$INTERACTIVE" == true ]]; then
-    gum style \
-        --foreground 212 --border-foreground 212 --border double \
-        --align center --width 50 --margin "1 2" --padding "1 2" \
-        'Proton Relay' 'Daily Report'
+    proton_header "Proton Relay" "Daily Report"
     echo ""
     echo -e "$REPORT"
 else
@@ -108,7 +106,7 @@ if [[ -n "$TELEGRAM_BOT_TOKEN" ]] && [[ -n "$TELEGRAM_CHAT_ID" ]]; then
 
     if [[ "$INTERACTIVE" == true ]]; then
         echo ""
-        gum style --foreground 42 "Report sent to Telegram"
+        proton_success "Report sent to Telegram"
     else
         echo "(Report sent to Telegram)"
     fi
