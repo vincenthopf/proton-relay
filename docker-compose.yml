@@ -1,0 +1,140 @@
+services:
+  hydroxide:
+    build:
+      context: ./hydroxide-container
+      dockerfile: Dockerfile
+    container_name: hydroxide-bridge
+    restart: unless-stopped
+    environment:
+      - PROTONMAIL_USERNAME=${PROTONMAIL_USERNAME}
+      - PROTONMAIL_PASSWORD=${PROTONMAIL_PASSWORD}
+    volumes:
+      - ./auth-volume:/home/hydroxide/.config/hydroxide
+      - bridge-password:/bridge-password
+    networks:
+      - email-network
+    expose:
+      - "1143"  # IMAP port
+      - "1025"  # SMTP port (not used for forwarding, but available)
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "1143"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  email-forwarder:
+    build:
+      context: ./forwarder
+      dockerfile: Dockerfile
+    container_name: email-forwarder
+    restart: unless-stopped
+    depends_on:
+      hydroxide:
+        condition: service_healthy
+    environment:
+      # IMAP Configuration (Hydroxide)
+      - IMAP_HOST=hydroxide
+      - IMAP_PORT=1143
+      - IMAP_USE_SSL=false
+      - PROTONMAIL_USERNAME=${PROTONMAIL_USERNAME}
+      - BRIDGE_PASSWORD=${BRIDGE_PASSWORD:-}  # Will be read from file if not set
+      
+      # External SMTP Configuration
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-false}
+      
+      # Forwarding Configuration
+      - FORWARD_TO=${FORWARD_TO}
+      - FORWARD_FROM=${FORWARD_FROM:-}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
+      - MAX_EMAILS_PER_BATCH=${MAX_EMAILS_PER_BATCH:-10}
+      - MARK_AS_READ=${MARK_AS_READ:-true}
+      - DELETE_AFTER_FORWARD=${DELETE_AFTER_FORWARD:-false}
+      
+      # Processing Options
+      - FORWARD_ATTACHMENTS=${FORWARD_ATTACHMENTS:-true}
+      - MAX_ATTACHMENT_SIZE=${MAX_ATTACHMENT_SIZE:-25}
+      - PRESERVE_HEADERS=${PRESERVE_HEADERS:-true}
+      - ADD_FORWARD_HEADER=${ADD_FORWARD_HEADER:-true}
+      
+      # Retry Configuration
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY=${RETRY_DELAY:-30}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Telegram Alerts (optional)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+
+      # Health Check
+      - HEALTH_CHECK_PORT=8080
+      - ENABLE_HEALTH_CHECK=true
+    volumes:
+      - forwarder-data:/data
+      - bridge-password:/bridge-password:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - email-network
+    ports:
+      - "${HEALTH_CHECK_PORT:-8080}:8080"  # Health check endpoint
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Browser for CAPTCHA clearing - run with: docker compose --profile captcha up -d captcha-browser
+  # Access at http://your-server:5800
+  captcha-browser:
+    image: jlesage/firefox
+    container_name: captcha-browser
+    profiles: [captcha]
+    ports:
+      - "5800:5800"  # Web UI
+    environment:
+      - DISPLAY_WIDTH=1280
+      - DISPLAY_HEIGHT=900
+      - KEEP_APP_RUNNING=1
+      - FF_OPEN_URL=https://account.proton.me/login
+    shm_size: 2gb
+    networks:
+      - email-network
+
+  migrate:
+    image: gilleslamiral/imapsync:latest
+    profiles: [migration]
+    depends_on:
+      hydroxide:
+        condition: service_healthy
+    networks:
+      - email-network
+    volumes:
+      - bridge-password:/bridge-password:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        BRIDGE_PASS=$$(cat /bridge-password/password.txt)
+        imapsync \
+          --host1 hydroxide --port1 1143 --user1 "${PROTONMAIL_USERNAME}" --password1 "$$BRIDGE_PASS" \
+          --host2 imap.fastmail.com --port2 993 --ssl2 --user2 "${FASTMAIL_USERNAME}" --password2 "${FASTMAIL_PASSWORD}" \
+          --automap --skipcrossduplicates --syncinternaldates --useuid
+
+networks:
+  email-network:
+    driver: bridge
+
+volumes:
+  hydroxide-auth:
+    driver: local
+  forwarder-data:
+    driver: local
+  bridge-password:
+    driver: local

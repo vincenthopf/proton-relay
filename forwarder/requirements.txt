@@ -1,0 +1,5 @@
+# Web server for health checks
+aiohttp==3.9.1
+
+# Standard library enhancements
+python-dotenv==1.0.0

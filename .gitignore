@@ -1,0 +1,52 @@
+# Environment files (contain secrets)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes
+volumes/
+
+# Auth data (runtime tokens and bridge passwords)
+auth-volume/
+!auth-volume/.gitkeep
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Bridge password files
+.bridge_password
+bridge_password.txt
+
+# Deploy instances (runtime data)
+deploy/instances/*/auth/
+deploy/instances/*/.env
