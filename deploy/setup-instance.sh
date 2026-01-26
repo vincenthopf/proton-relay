@@ -82,7 +82,6 @@ services:
     volumes:
       - forwarder-data:/data
       - bridge-password:/bridge-password:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - proton-relay-network
     ports:
@@ -93,6 +92,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  monitor:
+    build:
+      context: ../../../monitor
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME}-monitor
+    restart: unless-stopped
+    depends_on:
+      hydroxide:
+        condition: service_healthy
+    environment:
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+      - CONTAINER_NAME=${COMPOSE_PROJECT_NAME}-hydroxide
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - CHECK_INTERVAL=60
+      - STATUS_INTERVAL=3600
+      - ALERT_COOLDOWN=600
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proton-relay-network
 
 networks:
   proton-relay-network:

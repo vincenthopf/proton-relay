@@ -78,9 +78,12 @@ class HydroxideMonitor:
                 else:
                     self._container_name = "hydroxide"
 
-        self._docker_available = os.path.exists(DOCKER_SOCKET)
-        if not self._docker_available:
+        self._docker_available = os.path.exists(DOCKER_SOCKET) and os.access(DOCKER_SOCKET, os.R_OK)
+        if not os.path.exists(DOCKER_SOCKET):
             logger.warning("Docker socket not available at %s - hydroxide monitoring disabled", DOCKER_SOCKET)
+        elif not os.access(DOCKER_SOCKET, os.R_OK):
+            logger.warning("Docker socket not readable (permission denied) - hydroxide monitoring disabled")
+            logger.info("To enable monitoring, add docker group to forwarder container or run as root")
 
     def _docker_api_request(self, method: str, path: str, timeout: float = 5.0) -> tuple[bool, str]:
         """Make a request to Docker API via Unix socket.

@@ -12,7 +12,6 @@ from config import config
 from imap_monitor import IMAPMonitor
 from smtp_forwarder import SMTPForwarder
 from telegram_alerter import TelegramAlerter
-from hydroxide_monitor import HydroxideMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,6 @@ class EmailForwarderService:
         self.forward_count = 0
         self.error_count = 0
         self.shutdown_event = asyncio.Event()
-        self.hydroxide_monitor: Optional[HydroxideMonitor] = None
     
     async def setup(self):
         """Setup service components"""
@@ -59,9 +57,6 @@ class EmailForwarderService:
         
         # Initialize alerter (before wait_for_bridge_password so it can alert on timeout)
         self.alerter = TelegramAlerter(self.config.telegram_bot_token, self.config.telegram_chat_id)
-
-        # Initialize hydroxide monitor
-        self.hydroxide_monitor = HydroxideMonitor()
 
         # Wait for bridge password file if needed
         await self.wait_for_bridge_password()
@@ -342,28 +337,18 @@ class EmailForwarderService:
             # Log periodic status
             status_task = asyncio.create_task(self.log_status_periodically())
 
-            # Start hydroxide container monitor
-            hydroxide_task = asyncio.create_task(
-                self.hydroxide_monitor.monitor_loop(self.alerter)
-            )
-
             # Wait for shutdown
             await self.shutdown_event.wait()
 
             # Cancel tasks
             monitor_task.cancel()
             status_task.cancel()
-            hydroxide_task.cancel()
             try:
                 await monitor_task
             except asyncio.CancelledError:
                 pass
             try:
                 await status_task
-            except asyncio.CancelledError:
-                pass
-            try:
-                await hydroxide_task
             except asyncio.CancelledError:
                 pass
             

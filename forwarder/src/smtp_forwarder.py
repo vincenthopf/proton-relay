@@ -121,6 +121,9 @@ class SMTPForwarder:
     def create_forward_message(self, original_msg: email.message.Message) -> email.message.Message:
         """Forward original message intact, just updating envelope headers"""
         import copy
+        from email.utils import parseaddr, formataddr
+        from email.header import decode_header
+
         forward_msg = copy.deepcopy(original_msg)
 
         # Replace delivery headers
@@ -129,10 +132,28 @@ class SMTPForwarder:
         del forward_msg['Return-Path']
         forward_msg['To'] = self.config.forward_to
 
-        # Set From to our SMTP sender (required for SMTP auth)
+        # Parse original From to extract display name
         original_from = forward_msg.get('From', '')
+        original_name, original_email = parseaddr(str(original_from))
+
+        # Decode the name if it's encoded (e.g., =?utf-8?q?...?=)
+        if original_name:
+            decoded_parts = decode_header(original_name)
+            original_name = ''.join(
+                part.decode(charset or 'utf-8') if isinstance(part, bytes) else part
+                for part, charset in decoded_parts
+            )
+
+        # If no display name, use the email address as the name
+        if not original_name:
+            original_name = original_email or 'Unknown Sender'
+
+        # Create new From: "Original Sender Name" <smtp-account@domain>
+        smtp_email = self.config.forward_from or self.config.smtp_username
         del forward_msg['From']
-        forward_msg['From'] = self.config.forward_from or self.config.smtp_username
+        forward_msg['From'] = formataddr((original_name, smtp_email))
+
+        logger.debug(f"From rewritten: '{original_from}' -> '{forward_msg['From']}'")
 
         # Prefix subject
         original_subject = forward_msg.get('Subject', 'No Subject')
@@ -146,7 +167,7 @@ class SMTPForwarder:
             forward_msg['X-Forwarded-Date'] = original_msg.get('Date', 'Unknown')
             forward_msg['X-Original-To'] = original_msg.get('To', 'Unknown')
 
-        # Add Reply-To pointing to original sender
+        # Add Reply-To pointing to original sender (so replies go to them)
         if not forward_msg.get('Reply-To'):
             forward_msg['Reply-To'] = original_from
 
