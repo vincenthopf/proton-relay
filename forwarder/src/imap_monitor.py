@@ -37,11 +37,74 @@ class IMAPMonitor:
                     hash TEXT UNIQUE
                 )
             ''')
+            # Track high water mark - only forward emails newer than this UID
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS sync_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
             self.db_conn.commit()
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
+
+    def get_high_water_mark(self) -> Optional[int]:
+        """Get the UID high water mark - only forward emails with UID > this"""
+        cursor = self.db_conn.cursor()
+        cursor.execute("SELECT value FROM sync_state WHERE key = 'high_water_mark'")
+        result = cursor.fetchone()
+        if result:
+            return int(result[0])
+        return None
+
+    def set_high_water_mark(self, uid: int):
+        """Set the UID high water mark"""
+        cursor = self.db_conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('high_water_mark', ?)",
+            (str(uid),)
+        )
+        self.db_conn.commit()
+        logger.info(f"High water mark set to UID {uid}")
+
+    def initialize_high_water_mark(self) -> bool:
+        """On first run, set high water mark to current max UID (skip existing emails)"""
+        if self.get_high_water_mark() is not None:
+            return False  # Already initialized
+
+        try:
+            if not self.ensure_connected():
+                return False
+
+            # Get the highest UID in the mailbox
+            status, data = self.connection.search(None, 'ALL')
+            if status != 'OK' or not data[0]:
+                # Empty mailbox, start from 0
+                self.set_high_water_mark(0)
+                return True
+
+            email_ids = data[0].split()
+            if email_ids:
+                # Get UID of the last (newest) email
+                last_id = email_ids[-1]
+                status, uid_data = self.connection.fetch(last_id, '(UID)')
+                if status == 'OK':
+                    import re
+                    match = re.search(r'UID (\d+)', uid_data[0].decode())
+                    if match:
+                        max_uid = int(match.group(1))
+                        self.set_high_water_mark(max_uid)
+                        logger.info(f"Initialized high water mark to UID {max_uid} - will only forward NEW emails")
+                        return True
+
+            self.set_high_water_mark(0)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to initialize high water mark: {e}")
+            return False
     
     def connect(self) -> bool:
         """Connect to IMAP server"""
@@ -217,99 +280,119 @@ class IMAPMonitor:
         
         return body
     
-    def fetch_unread_emails(self) -> List[Tuple[str, email.message.Message]]:
-        """Fetch unread emails from IMAP server"""
+    def fetch_new_emails(self) -> List[Tuple[str, email.message.Message]]:
+        """Fetch new emails (UID > high water mark) from IMAP server"""
         emails = []
-        
+
         try:
             if not self.ensure_connected():
                 logger.warning("Not connected to IMAP server, skipping fetch")
                 return emails
-            
-            # Search for unread emails
-            search_criteria = 'UNSEEN' if self.config.mark_as_read else 'ALL'
+
+            # Initialize high water mark on first run (marks all existing emails as "seen")
+            self.initialize_high_water_mark()
+
+            high_water_mark = self.get_high_water_mark()
+            if high_water_mark is None:
+                logger.warning("Could not determine high water mark, skipping")
+                return emails
+
+            # Search for emails with UID greater than high water mark
+            search_criteria = f'UID {high_water_mark + 1}:*'
             logger.debug(f"Searching for emails with criteria: {search_criteria}")
-            
-            status, data = self.connection.search(None, search_criteria)
-            
+
+            status, data = self.connection.uid('search', None, f'UID {high_water_mark + 1}:*')
+
             if status != 'OK':
                 logger.error(f"❌ Failed to search emails: {status}")
                 return emails
-            
-            email_ids = data[0].split()
-            
-            if not email_ids:
+
+            uids = data[0].split()
+
+            # Filter out UIDs <= high water mark (IMAP quirk: UID search can include boundary)
+            uids = [uid for uid in uids if int(uid) > high_water_mark]
+
+            if not uids:
                 logger.debug("📥 No new emails found")
                 return emails
-            
+
             # Limit batch size
-            total_found = len(email_ids)
-            email_ids = email_ids[:self.config.max_emails_per_batch]
-            
-            if total_found > len(email_ids):
-                logger.info(f"📨 Found {total_found} new email(s), processing batch of {len(email_ids)}")
+            total_found = len(uids)
+            uids = uids[:self.config.max_emails_per_batch]
+
+            if total_found > len(uids):
+                logger.info(f"📨 Found {total_found} new email(s), processing batch of {len(uids)}")
             else:
-                logger.info(f"📨 Found {len(email_ids)} new email(s) to process")
-            
-            for email_id in email_ids:
+                logger.info(f"📨 Found {len(uids)} new email(s) to process")
+
+            max_uid_processed = high_water_mark
+
+            for uid in uids:
+                uid_int = int(uid)
                 try:
-                    # Fetch email
-                    status, data = self.connection.fetch(email_id, '(RFC822)')
+                    # Fetch email by UID
+                    status, data = self.connection.uid('fetch', uid, '(RFC822)')
                     
                     if status != 'OK':
-                        logger.error(f"Failed to fetch email {email_id}")
+                        logger.error(f"Failed to fetch email UID {uid}")
                         continue
-                    
+
                     # Parse email
                     raw_email = data[0][1]
                     msg = email.message_from_bytes(raw_email)
-                    
+
                     # Get email details for logging
                     subject = self.decode_header_value(msg.get('Subject', 'No Subject'))
                     sender = self.decode_header_value(msg.get('From', 'Unknown'))
                     date = msg.get('Date', 'Unknown')
-                    
-                    # Check if already forwarded
+
+                    # Check if already forwarded (backup check)
                     if self.is_already_forwarded(msg):
                         logger.info(f"🔄 Already forwarded: '{subject}' from {sender}")
-                        if self.config.mark_as_read:
-                            self.connection.store(email_id, '+FLAGS', '\\Seen')
+                        max_uid_processed = max(max_uid_processed, uid_int)
                         continue
-                    
-                    logger.info(f"📧 New email: '{subject}' from {sender} ({date})")
-                    emails.append((email_id.decode() if isinstance(email_id, bytes) else str(email_id), msg))
-                    
+
+                    logger.info(f"📧 New email (UID {uid_int}): '{subject}' from {sender} ({date})")
+                    emails.append((uid.decode() if isinstance(uid, bytes) else str(uid), msg))
+
+                    # Track highest UID we've seen
+                    max_uid_processed = max(max_uid_processed, uid_int)
+
                 except Exception as e:
-                    logger.error(f"❌ Error processing email {email_id}: {e}")
+                    logger.error(f"❌ Error processing email UID {uid}: {e}")
                     continue
-            
+
+            # Update high water mark if we processed any emails
+            if max_uid_processed > high_water_mark:
+                self.set_high_water_mark(max_uid_processed)
+
             if emails:
                 logger.info(f"📤 Ready to forward {len(emails)} email(s)")
             else:
                 logger.debug("No new emails to forward after filtering")
-            
+
         except Exception as e:
             logger.error(f"Error fetching emails: {e}")
             self.connection = None
-        
+
         return emails
     
-    def mark_as_read(self, email_id: str):
-        """Mark email as read"""
+    def mark_as_read(self, uid: str):
+        """Mark email as read by UID"""
         try:
             if self.connection and self.config.mark_as_read:
-                self.connection.store(email_id.encode(), '+FLAGS', '\\Seen')
-                logger.debug(f"Marked email {email_id} as read")
+                self.connection.uid('store', uid, '+FLAGS', '\\Seen')
+                logger.debug(f"Marked email UID {uid} as read")
         except Exception as e:
             logger.error(f"Failed to mark email as read: {e}")
-    
-    def delete_email(self, email_id: str):
-        """Delete email from server"""
+
+    def delete_email(self, uid: str):
+        """Delete email from server by UID"""
         try:
             if self.connection and self.config.delete_after_forward:
-                self.connection.store(email_id.encode(), '+FLAGS', '\\Deleted')
+                self.connection.uid('store', uid, '+FLAGS', '\\Deleted')
                 self.connection.expunge()
-                logger.debug(f"Deleted email {email_id}")
+                logger.debug(f"Deleted email UID {uid}")
         except Exception as e:
             logger.error(f"Failed to delete email: {e}")
     
@@ -323,12 +406,13 @@ class IMAPMonitor:
             try:
                 check_count += 1
                 if check_count % 12 == 1:  # Log every hour (assuming 5 min intervals)
-                    logger.info(f"🔍 Performing email check #{check_count}")
+                    hwm = self.get_high_water_mark()
+                    logger.info(f"🔍 Performing email check #{check_count} (high water mark: UID {hwm})")
                 else:
                     logger.debug(f"Checking for new emails (check #{check_count})")
-                
-                # Fetch unread emails
-                emails = self.fetch_unread_emails()
+
+                # Fetch new emails (UID > high water mark)
+                emails = self.fetch_new_emails()
                 
                 # Forward emails
                 forwarded_count = 0
