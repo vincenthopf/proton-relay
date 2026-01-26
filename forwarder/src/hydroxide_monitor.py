@@ -1,18 +1,22 @@
 """Monitor hydroxide container for auth errors and health issues."""
 
 import asyncio
+import json
 import logging
+import os
 import re
-import subprocess
+import socket
+import urllib.parse
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Docker socket path
+DOCKER_SOCKET = "/var/run/docker.sock"
+
 
 class HydroxideMonitor:
-    """Monitor hydroxide container for auth errors via Docker logs."""
-
-    CONTAINER_NAME = "hydroxide-bridge"
+    """Monitor hydroxide container for auth errors via Docker API."""
 
     # Error patterns to detect in logs
     ERROR_PATTERNS = {
@@ -56,22 +60,76 @@ class HydroxideMonitor:
         "hydroxide_unhealthy": "Hydroxide container is unhealthy or stopped.",
     }
 
-    def __init__(self):
-        self._last_log_check = 0
-        self._logs_since = "1m"  # Check logs from last minute
+    def __init__(self, container_name: Optional[str] = None):
+        # Container name from env or derive from COMPOSE_PROJECT_NAME
+        if container_name:
+            self._container_name = container_name
+        else:
+            project = os.environ.get("COMPOSE_PROJECT_NAME", "")
+            if project:
+                self._container_name = f"{project}-hydroxide"
+            else:
+                # Fallback - try to detect from PROTONMAIL_USERNAME
+                username = os.environ.get("PROTONMAIL_USERNAME", "")
+                if username and "@" in username:
+                    name = username.split("@")[0].lower()
+                    name = re.sub(r'[^a-z0-9-]', '-', name)
+                    self._container_name = f"{name}-hydroxide"
+                else:
+                    self._container_name = "hydroxide"
 
-    def _run_docker_command(self, args: list[str]) -> tuple[bool, str]:
-        """Run a docker command and return (success, output)."""
+        self._docker_available = os.path.exists(DOCKER_SOCKET)
+        if not self._docker_available:
+            logger.warning("Docker socket not available at %s - hydroxide monitoring disabled", DOCKER_SOCKET)
+
+    def _docker_api_request(self, method: str, path: str, timeout: float = 5.0) -> tuple[bool, str]:
+        """Make a request to Docker API via Unix socket.
+
+        Returns:
+            (success, response_body)
+        """
+        if not self._docker_available:
+            return False, "Docker socket not available"
+
         try:
-            result = subprocess.run(
-                ["docker"] + args,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.returncode == 0, result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            return False, "Command timed out"
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(DOCKER_SOCKET)
+
+            # Build HTTP request
+            request = f"{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+            sock.sendall(request.encode())
+
+            # Read response
+            response = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+
+            sock.close()
+
+            # Parse response
+            response_str = response.decode('utf-8', errors='ignore')
+
+            # Split headers and body
+            if "\r\n\r\n" in response_str:
+                headers, body = response_str.split("\r\n\r\n", 1)
+            else:
+                headers, body = response_str, ""
+
+            # Check status code
+            first_line = headers.split("\r\n")[0]
+            if "200" in first_line or "304" in first_line:
+                return True, body
+            elif "404" in first_line:
+                return False, "Container not found"
+            else:
+                return False, f"HTTP error: {first_line}"
+
+        except socket.timeout:
+            return False, "Request timed out"
         except Exception as e:
             return False, str(e)
 
@@ -81,34 +139,46 @@ class HydroxideMonitor:
         Returns:
             (is_healthy, error_message_if_unhealthy)
         """
-        # Run in thread to avoid blocking
+        if not self._docker_available:
+            return True, None  # Assume healthy if we can't check
+
         loop = asyncio.get_event_loop()
-        success, output = await loop.run_in_executor(
+        encoded_name = urllib.parse.quote(self._container_name, safe='')
+        success, response = await loop.run_in_executor(
             None,
-            lambda: self._run_docker_command([
-                "inspect",
-                "--format",
-                "{{.State.Health.Status}}",
-                self.CONTAINER_NAME,
-            ]),
+            lambda: self._docker_api_request("GET", f"/containers/{encoded_name}/json"),
         )
 
         if not success:
-            # Container might not exist or docker not available
-            if "No such object" in output:
-                return False, "Container not found"
-            return False, f"Docker inspect failed: {output}"
+            if "not found" in response.lower():
+                return False, f"Container '{self._container_name}' not found"
+            return False, f"Docker API error: {response}"
 
-        health_status = output.strip().lower()
+        try:
+            data = json.loads(response)
+            state = data.get("State", {})
 
-        if health_status == "healthy":
+            # Check if running
+            if not state.get("Running", False):
+                return False, "Container not running"
+
+            # Check health if available
+            health = state.get("Health", {})
+            if health:
+                status = health.get("Status", "").lower()
+                if status == "healthy":
+                    return True, None
+                elif status == "starting":
+                    return True, None  # Still starting, not an error
+                elif status == "unhealthy":
+                    return False, "Container healthcheck failing"
+                else:
+                    return True, None  # No health status = assume OK
+
             return True, None
-        elif health_status == "starting":
-            return True, None  # Still starting, not an error yet
-        elif health_status == "unhealthy":
-            return False, "Container healthcheck failing"
-        else:
-            return False, f"Unknown health status: {health_status}"
+
+        except json.JSONDecodeError as e:
+            return False, f"Failed to parse Docker response: {e}"
 
     async def check_logs_for_errors(self) -> list[tuple[str, str]]:
         """Scan recent container logs for error patterns.
@@ -116,30 +186,34 @@ class HydroxideMonitor:
         Returns:
             List of (error_type, matched_line) tuples
         """
+        if not self._docker_available:
+            return []
+
         loop = asyncio.get_event_loop()
-        success, output = await loop.run_in_executor(
+        encoded_name = urllib.parse.quote(self._container_name, safe='')
+        # Get logs from last 60 seconds
+        success, response = await loop.run_in_executor(
             None,
-            lambda: self._run_docker_command([
-                "logs",
-                "--since",
-                self._logs_since,
-                self.CONTAINER_NAME,
-            ]),
+            lambda: self._docker_api_request(
+                "GET",
+                f"/containers/{encoded_name}/logs?stdout=1&stderr=1&since={int(asyncio.get_event_loop().time()) - 60}&tail=100",
+                timeout=10.0,
+            ),
         )
 
         if not success:
-            logger.debug("Failed to get container logs: %s", output)
+            logger.debug("Failed to get container logs: %s", response)
             return []
 
         errors_found = []
-        lines = output.lower().split("\n")
+        lines = response.lower().split("\n")
 
         for error_type, patterns in self.ERROR_PATTERNS.items():
             for pattern in patterns:
                 regex = re.compile(pattern, re.IGNORECASE)
                 for line in lines:
                     if regex.search(line):
-                        errors_found.append((error_type, line.strip()))
+                        errors_found.append((error_type, line.strip()[:200]))  # Limit line length
                         break  # Only report first match per error type
                 else:
                     continue
@@ -154,7 +228,11 @@ class HydroxideMonitor:
             alerter: TelegramAlerter instance for sending alerts
             interval: Seconds between checks
         """
-        logger.info("Hydroxide monitor started (interval=%ds)", interval)
+        if not self._docker_available:
+            logger.info("Hydroxide monitor disabled (Docker socket not available)")
+            return  # Exit loop - no point running without Docker
+
+        logger.info("Hydroxide monitor started (container=%s, interval=%ds)", self._container_name, interval)
 
         while True:
             try:
@@ -165,7 +243,7 @@ class HydroxideMonitor:
                     logger.warning("Hydroxide unhealthy: %s", error_msg)
                     await alerter.send_alert(
                         "hydroxide_unhealthy",
-                        self.ALERT_MESSAGES["hydroxide_unhealthy"],
+                        f"{self.ALERT_MESSAGES['hydroxide_unhealthy']} ({error_msg})",
                     )
                 else:
                     # Check logs for auth errors

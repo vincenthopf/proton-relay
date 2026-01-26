@@ -3,6 +3,7 @@ import logging
 import smtplib
 import ssl
 import email
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -10,22 +11,28 @@ logger = logging.getLogger(__name__)
 
 class SMTPForwarder:
     """Forward emails via external SMTP server"""
-    
+
     def __init__(self, config, alerter=None):
         self.config = config
         self.alerter = alerter
         self.smtp_connection = None
         self.last_connect_time = 0
         self.connection_lifetime = 300  # Reuse connection for 5 minutes
+        self._lock = threading.Lock()  # Protect concurrent access
     
     def connect(self) -> bool:
-        """Connect to SMTP server"""
+        """Connect to SMTP server (thread-safe)"""
+        with self._lock:
+            return self._connect_internal()
+
+    def _connect_internal(self) -> bool:
+        """Internal connect method - must be called with lock held"""
         try:
             # Close existing connection if it's old
             if self.smtp_connection and (time.time() - self.last_connect_time > self.connection_lifetime):
                 logger.debug("Closing old SMTP connection")
-                self.disconnect()
-            
+                self._disconnect_internal()
+
             # Reuse existing connection if available
             if self.smtp_connection:
                 try:
@@ -35,11 +42,11 @@ class SMTPForwarder:
                 except:
                     logger.debug("Existing SMTP connection is dead, reconnecting")
                     self.smtp_connection = None
-            
+
             logger.info(f"🔌 Connecting to SMTP server {self.config.smtp_host}:{self.config.smtp_port}")
-            
+
             if self.config.smtp_use_ssl:
-                # SSL connection
+                # SSL connection (port 465)
                 context = ssl.create_default_context()
                 self.smtp_connection = smtplib.SMTP_SSL(
                     self.config.smtp_host,
@@ -47,29 +54,31 @@ class SMTPForwarder:
                     context=context
                 )
             else:
-                # Regular or TLS connection
+                # Regular connection, optionally upgrade to TLS
                 self.smtp_connection = smtplib.SMTP(
                     self.config.smtp_host,
-                    self.config.smtp_port
+                    self.config.smtp_port,
+                    timeout=30
                 )
-                
+
                 if self.config.smtp_use_tls:
+                    # STARTTLS (port 587)
                     context = ssl.create_default_context()
                     self.smtp_connection.starttls(context=context)
-            
+
             # Login
             self.smtp_connection.login(
                 self.config.smtp_username,
                 self.config.smtp_password
             )
-            
+
             self.last_connect_time = time.time()
             logger.info("✅ Successfully connected to SMTP server")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to connect to SMTP server: {e}")
-            
+
             # Provide helpful error messages
             if 'authentication' in str(e).lower() or '535' in str(e):
                 logger.error("Authentication failed. Please check:")
@@ -90,12 +99,17 @@ class SMTPForwarder:
                 logger.error(f"  - TLS setting: {self.config.smtp_use_tls}")
                 logger.error(f"  - SSL setting: {self.config.smtp_use_ssl}")
                 logger.error("  - These match your SMTP provider's requirements")
-            
+
             self.smtp_connection = None
             return False
     
     def disconnect(self):
-        """Disconnect from SMTP server"""
+        """Disconnect from SMTP server (thread-safe)"""
+        with self._lock:
+            self._disconnect_internal()
+
+    def _disconnect_internal(self):
+        """Internal disconnect - must be called with lock held"""
         try:
             if self.smtp_connection:
                 self.smtp_connection.quit()
