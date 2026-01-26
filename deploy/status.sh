@@ -3,38 +3,94 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTANCES_DIR="$SCRIPT_DIR/instances"
 
-echo "ProtonMail Forwarder Status"
-echo "============================"
+# Check for gum
+if ! command -v gum &> /dev/null; then
+    echo "gum not found. Install: https://github.com/charmbracelet/gum"
+    exit 1
+fi
+
+# Header
+gum style \
+    --foreground 212 --border-foreground 212 --border double \
+    --align center --width 60 --margin "1 2" --padding "1 2" \
+    'Proton Relay' 'Status Dashboard'
+
 echo ""
 
+# Collect status for all instances
+has_instances=false
+
 for instance_dir in "$INSTANCES_DIR"/*/; do
-    if [[ -f "$instance_dir/docker-compose.yml" ]]; then
-        instance_name=$(basename "$instance_dir")
+    [ -d "$instance_dir" ] || continue
+    [[ -f "$instance_dir/docker-compose.yml" ]] || continue
 
-        # Load env to get ports
-        if [[ -f "$instance_dir/.env" ]]; then
-            source "$instance_dir/.env"
-        fi
+    has_instances=true
+    name=$(basename "$instance_dir")
 
-        echo "[$instance_name]"
-
-        # Check hydroxide container
-        hydroxide_status=$(docker inspect --format='{{.State.Health.Status}}' "${instance_name}-hydroxide" 2>/dev/null || echo "not running")
-        forwarder_status=$(docker inspect --format='{{.State.Health.Status}}' "${instance_name}-forwarder" 2>/dev/null || echo "not running")
-
-        # Get forward count from health endpoint
-        forward_count="N/A"
-        if [[ "$forwarder_status" == "healthy" ]] && [[ -n "$HEALTH_CHECK_PORT" ]]; then
-            stats=$(curl -s "http://localhost:$HEALTH_CHECK_PORT/health" 2>/dev/null | grep -o '"forward_count":[0-9]*' | cut -d: -f2)
-            if [[ -n "$stats" ]]; then
-                forward_count="$stats"
-            fi
-        fi
-
-        printf "  %-12s %s\n" "Hydroxide:" "$hydroxide_status"
-        printf "  %-12s %s\n" "Forwarder:" "$forwarder_status"
-        printf "  %-12s %s\n" "Forwarded:" "$forward_count emails"
-        printf "  %-12s %s\n" "Health:" "http://localhost:${HEALTH_CHECK_PORT:-8080}/health"
-        echo ""
+    # Load env for ports
+    health_port=""
+    if [[ -f "$instance_dir/.env" ]]; then
+        health_port=$(grep -E '^HEALTH_CHECK_PORT=' "$instance_dir/.env" 2>/dev/null | cut -d= -f2)
     fi
+
+    # Get container status
+    hydroxide_status=$(docker inspect --format='{{.State.Health.Status}}' "${name}-hydroxide" 2>/dev/null || echo "stopped")
+    forwarder_status=$(docker inspect --format='{{.State.Health.Status}}' "${name}-forwarder" 2>/dev/null || echo "stopped")
+
+    # Get stats from health endpoint
+    forward_count="-"
+    error_count="-"
+    if [[ -n "$health_port" ]] && [[ "$forwarder_status" == "healthy" ]]; then
+        health_data=$(curl -s --connect-timeout 2 "http://localhost:$health_port/health" 2>/dev/null || echo "{}")
+        forward_count=$(echo "$health_data" | grep -o '"forward_count":[0-9]*' | cut -d: -f2)
+        error_count=$(echo "$health_data" | grep -o '"error_count":[0-9]*' | cut -d: -f2)
+        [[ -z "$forward_count" ]] && forward_count="-"
+        [[ -z "$error_count" ]] && error_count="-"
+    fi
+
+    # Status colors
+    h_color=196  # red
+    f_color=196
+    [[ "$hydroxide_status" == "healthy" ]] && h_color=42  # green
+    [[ "$hydroxide_status" == "starting" ]] && h_color=214  # yellow
+    [[ "$forwarder_status" == "healthy" ]] && f_color=42
+    [[ "$forwarder_status" == "starting" ]] && f_color=214
+
+    # Overall status
+    if [[ "$hydroxide_status" == "healthy" ]] && [[ "$forwarder_status" == "healthy" ]]; then
+        status_icon="✓"
+        status_color=42
+    elif [[ "$hydroxide_status" == "stopped" ]] && [[ "$forwarder_status" == "stopped" ]]; then
+        status_icon="○"
+        status_color=240
+    else
+        status_icon="!"
+        status_color=214
+    fi
+
+    # Format status strings with color
+    h_status_str=$(gum style --foreground $h_color "$hydroxide_status")
+    f_status_str=$(gum style --foreground $f_color "$forwarder_status")
+    name_str=$(gum style --foreground $status_color --bold "$status_icon $name")
+
+    # Build instance box content
+    box_content="$name_str
+
+  hydroxide:  $h_status_str
+  forwarder:  $f_status_str
+
+  forwarded: $forward_count    errors: $error_count
+  health: http://localhost:${health_port:-????}/health"
+
+    gum style --border rounded --border-foreground $status_color --padding "0 1" --width 58 "$box_content"
+    echo ""
 done
+
+if [[ "$has_instances" == false ]]; then
+    gum style --foreground 240 "No instances found. Run ./setup-all.sh first."
+fi
+
+# Legend
+legend="Legend: $(gum style --foreground 42 '✓ healthy')  $(gum style --foreground 214 '! degraded')  $(gum style --foreground 240 '○ stopped')"
+gum style --foreground 240 "$legend"
+echo ""
