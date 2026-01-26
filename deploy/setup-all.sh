@@ -225,7 +225,6 @@ The bridge password will be generated automatically."
 
     health_port=$((8080 + i))
     interval=${intervals[$((i-1))]}
-    name="proton${i}"
 
     pm_user=$(gum input \
         --placeholder "user@protonmail.com" \
@@ -240,6 +239,12 @@ The bridge password will be generated automatically."
         --password \
         --width 50)
 
+    # Extract username from email (part before @)
+    name="${pm_user%%@*}"
+
+    # Sanitize name (replace dots/special chars with dashes, lowercase)
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+
     # Create instance
     "$SCRIPT_DIR/setup-instance.sh" "$name" "$health_port" "$interval" > /dev/null
 
@@ -251,7 +256,7 @@ The bridge password will be generated automatically."
     instances+=("$name")
 
     echo ""
-    proton_success "Account $i configured"
+    proton_success "$name configured (from $pm_user)"
     sleep 1
 done
 
