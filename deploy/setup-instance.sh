@@ -15,11 +15,12 @@ INSTANCE_DIR="$SCRIPT_DIR/instances/$INSTANCE_NAME"
 mkdir -p "$INSTANCE_DIR"
 
 # Create docker-compose.yml for this instance (no captcha browser - that's shared)
+# Paths are relative to instances/<name>/ so need ../../../ to reach repo root
 cat > "$INSTANCE_DIR/docker-compose.yml" << 'COMPOSE_EOF'
 services:
   hydroxide:
     build:
-      context: ../../hydroxide-container
+      context: ../../../hydroxide-container
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME}-hydroxide
     restart: unless-stopped
@@ -42,7 +43,7 @@ services:
 
   forwarder:
     build:
-      context: ../../forwarder
+      context: ../../../forwarder
       dockerfile: Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME}-forwarder
     restart: unless-stopped
@@ -139,8 +140,9 @@ cd "$(dirname "$0")"
 docker network create proton-relay-network 2>/dev/null || true
 
 # Load shared config first, then instance config (instance overrides shared)
+# shared.env is in deploy/, instance is in deploy/instances/<name>/
 set -a
-[ -f ../shared.env ] && source ../shared.env
+[ -f ../../shared.env ] && source ../../shared.env
 source .env
 set +a
 
