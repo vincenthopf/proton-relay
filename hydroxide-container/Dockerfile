@@ -1,5 +1,5 @@
 # Multi-stage build for hydroxide with auth patch
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26.10-alpine3.24 AS builder
 
 # Hydroxide version - pin to known-good commit, override with --build-arg HYDROXIDE_VERSION=master
 ARG HYDROXIDE_VERSION=759f6d1
@@ -24,10 +24,10 @@ RUN go mod download
 RUN go build -o hydroxide ./cmd/hydroxide
 
 # Final stage
-FROM alpine:3.18
+FROM alpine:3.24
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates bash
+RUN apk add --no-cache --upgrade ca-certificates ca-certificates-bundle bash
 
 # Create non-root user
 RUN addgroup -g 1000 hydroxide && \
