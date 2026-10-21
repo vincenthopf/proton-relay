@@ -1,6 +1,10 @@
 # Python email forwarder container
 FROM python:3.11-slim
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --only-upgrade ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN groupadd -r forwarder && useradd -r -g forwarder forwarder
 
